@@ -141,10 +141,12 @@ int Dag::init(const configure::Workflow& conf, const std::string& name) {
       LOG(ERROR) << "Failed to get_op, op type[" << node->type << "]";
       return ERR_INTERNAL_FAILURE;
     }
+    // Set the name of the Op as the key of the matching enginei.
+    op->set_engine_name(node->name);
     // node->conf could be NULL
     node->conf = op->create_config(conf.nodes(i));
     OpRepository::instance().return_op(node->type, op);
-    _name_nodes.insert(std::make_pair(node->name, node));
+    _name_nodes.insert(std::make_pair(node->name, node));  // NOLINT
     _index_nodes.push_back(node);
   }
 
