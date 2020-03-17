@@ -152,7 +152,7 @@ class Server(object):
             elif device == "gpu":
                 engine.type = "FLUID_GPU_ANALYSIS_DIR"
 
-            self.model_toolkit_conf.engines.extend([engine])  #TODO
+            self.model_toolkit_conf.engines.extend([engine])
 
     def _prepare_infer_service(self, port):
         if self.infer_service_conf == None:
@@ -165,14 +165,9 @@ class Server(object):
 
     def _prepare_resource(self, workdir):
         if self.resource_conf == None:
-            with open("{}/{}".format(workdir, self.general_model_config_fn),
-                      "w") as fout:
-                fout.write(str(self.model_conf))
             self.resource_conf = server_sdk.ResourceConf()
             self.resource_conf.model_toolkit_path = workdir
             self.resource_conf.model_toolkit_file = self.model_toolkit_fn
-            self.resource_conf.general_model_path = workdir
-            self.resource_conf.general_model_file = self.general_model_config_fn
 
     def _write_pb_str(self, filepath, pb_obj):
         with open(filepath, "w") as fout:
@@ -180,21 +175,6 @@ class Server(object):
 
     def load_model_config(self, model_config_paths):
         self.model_config_paths = model_config_paths
-        self.model_conf = m_config.GeneralModelConfig()
-        if isinstance(model_config_paths, str):
-            path = model_config_paths
-        elif isinstance(model_config_paths, dict):
-            if len(model_config_paths) > 1:
-                print(
-                    "WARNING: there are multiple model configurations in model_config_paths, only one is randomly selected and written to resource.prototxt file."
-                )
-            path = model_config_paths.items()[0][1]
-        else:
-            raise Exception("model_config_paths can not be {}".format(
-                type(model_config_paths)))
-        f = open("{}/serving_server_conf.prototxt".format(path), 'r')
-        self.model_conf = google.protobuf.text_format.Merge(
-            str(f.read()), self.model_conf)
         # check config here
         # print config here
 
