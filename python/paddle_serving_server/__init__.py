@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# pylint: disable=doc-string-missing
 
 import os
 from .proto import server_configure_pb2 as server_sdk
@@ -38,13 +39,14 @@ class OpMaker(object):
 
     # currently, inputs and outputs are not used
     # when we have OpGraphMaker, inputs and outputs are necessary
-    def create(self, name, inputs=[], outputs=[]):
-        if name not in self.op_dict:
-            raise Exception("Op name {} is not supported right now".format(
-                name))
+    def create(self, node_type, node_name=None, inputs=[], outputs=[]):
+        if node_type not in self.op_dict:
+            raise Exception("Op type {} is not supported right now".format(
+                node_type))
         node = server_sdk.DAGNode()
-        node.name = "{}_op".format(name)
-        node.type = self.op_dict[name]
+        node.name = node_name if node_name is not None else "{}_op".format(
+            node_type)
+        node.type = self.op_dict[node_type]
         return node
 
 
@@ -54,12 +56,19 @@ class OpSeqMaker(object):
         self.workflow.name = "workflow1"
         self.workflow.workflow_type = "Sequence"
 
-    def add_op(self, node):
-        if len(self.workflow.nodes) >= 1:
-            dep = server_sdk.DAGNodeDependency()
-            dep.name = self.workflow.nodes[-1].name
-            dep.mode = "RO"
-            node.dependencies.extend([dep])
+    def add_op(self, node, dependent_nodes=None):
+        if not dependent_nodes:
+            if len(self.workflow.nodes) >= 1:
+                dep = server_sdk.DAGNodeDependency()
+                dep.name = self.workflow.nodes[-1].name
+                dep.mode = "RO"
+                node.dependencies.extend([dep])
+        else:
+            for dep_node in dependent_nodes:
+                dep = server_sdk.DAGNodeDependency()
+                dep.name = dep_node.name
+                dep.mode = "RO"
+                node.dependencies.extend([dep])
         self.workflow.nodes.extend([node])
 
     def get_op_sequence(self):
@@ -74,7 +83,6 @@ class Server(object):
         self.infer_service_conf = None
         self.model_toolkit_conf = None
         self.resource_conf = None
-        self.engine = None
         self.memory_optimization = False
         self.model_conf = None
         self.workflow_fn = "workflow.prototxt"
@@ -115,32 +123,36 @@ class Server(object):
             self.use_local_bin = True
             self.bin_path = os.environ["SERVING_BIN"]
 
-    def _prepare_engine(self, model_config_path, device):
+    def _prepare_engine(self, model_config_paths, device):
         if self.model_toolkit_conf == None:
             self.model_toolkit_conf = server_sdk.ModelToolkitConf()
 
-        if self.engine == None:
-            self.engine = server_sdk.EngineDesc()
+        if isinstance(model_config_paths, str):
+            model_config_paths = {"general_model": model_config_paths}
+        elif not isinstance(model_config_paths, dict):
+            raise Exception("model_config_paths can not be {}".format(
+                type(model_config_paths)))
 
-        self.model_config_path = model_config_path
-        self.engine.name = "general_model"
-        self.engine.reloadable_meta = model_config_path + "/fluid_time_file"
-        os.system("touch {}".format(self.engine.reloadable_meta))
-        self.engine.reloadable_type = "timestamp_ne"
-        self.engine.runtime_thread_num = 0
-        self.engine.batch_infer_size = 0
-        self.engine.enable_batch_align = 0
-        self.engine.model_data_path = model_config_path
-        self.engine.enable_memory_optimization = self.memory_optimization
-        self.engine.static_optimization = False
-        self.engine.force_update_static_cache = False
+        for engine_name, model_config_path in model_config_paths.items():
+            engine = server_sdk.EngineDesc()
+            engine.name = engine_name
+            engine.reloadable_meta = model_config_path + "/fluid_time_file"
+            os.system("touch {}".format(engine.reloadable_meta))
+            engine.reloadable_type = "timestamp_ne"
+            engine.runtime_thread_num = 0
+            engine.batch_infer_size = 0
+            engine.enable_batch_align = 0
+            engine.model_data_path = model_config_path
+            engine.enable_memory_optimization = self.memory_optimization
+            engine.static_optimization = False
+            engine.force_update_static_cache = False
 
-        if device == "cpu":
-            self.engine.type = "FLUID_CPU_ANALYSIS_DIR"
-        elif device == "gpu":
-            self.engine.type = "FLUID_GPU_ANALYSIS_DIR"
+            if device == "cpu":
+                engine.type = "FLUID_CPU_ANALYSIS_DIR"
+            elif device == "gpu":
+                engine.type = "FLUID_GPU_ANALYSIS_DIR"
 
-        self.model_toolkit_conf.engines.extend([self.engine])
+            self.model_toolkit_conf.engines.extend([engine])  #TODO
 
     def _prepare_infer_service(self, port):
         if self.infer_service_conf == None:
@@ -166,9 +178,20 @@ class Server(object):
         with open(filepath, "w") as fout:
             fout.write(str(pb_obj))
 
-    def load_model_config(self, path):
-        self.model_config_path = path
+    def load_model_config(self, model_config_paths):
+        self.model_config_paths = model_config_paths
         self.model_conf = m_config.GeneralModelConfig()
+        if isinstance(model_config_paths, str):
+            path = model_config_paths
+        elif isinstance(model_config_paths, dict):
+            if len(model_config_paths) > 1:
+                print(
+                    "WARNING: there are multiple model configurations in model_config_paths, only one is randomly selected and written to resource.prototxt file."
+                )
+            path = model_config_paths.items()[0][1]
+        else:
+            raise Exception("model_config_paths can not be {}".format(
+                type(model_config_paths)))
         f = open("{}/serving_server_conf.prototxt".format(path), 'r')
         self.model_conf = google.protobuf.text_format.Merge(
             str(f.read()), self.model_conf)
@@ -239,7 +262,7 @@ class Server(object):
         if not self.port_is_available(port):
             raise SystemExit("Prot {} is already used".format(port))
         self._prepare_resource(workdir)
-        self._prepare_engine(self.model_config_path, device)
+        self._prepare_engine(self.model_config_paths, device)
         self._prepare_infer_service(port)
         self.workdir = workdir
 
