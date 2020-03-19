@@ -73,14 +73,16 @@ PYBIND11_MODULE(serving_client, m) {
               const std::vector<std::string> &int_feed_name,
               const std::vector<std::string> &fetch_name,
               PredictorRes &predict_res,
-              const int &pid) {
+              const int &pid,
+              const std::string &predict_name) {
              return self.predict(float_feed,
                                  float_feed_name,
                                  int_feed,
                                  int_feed_name,
                                  fetch_name,
                                  predict_res,
-                                 pid);
+                                 pid,
+                                 predict_name);
            })
       .def("batch_predict",
            [](PredictorClient &self,
@@ -92,14 +94,16 @@ PYBIND11_MODULE(serving_client, m) {
               const std::vector<std::string> &int_feed_name,
               const std::vector<std::string> &fetch_name,
               PredictorRes &predict_res_batch,
-              const int &pid) {
+              const int &pid,
+              const std::string &predict_name) {
              return self.batch_predict(float_feed_batch,
                                        float_feed_name,
                                        int_feed_batch,
                                        int_feed_name,
                                        fetch_name,
                                        predict_res_batch,
-                                       pid);
+                                       pid,
+                                       predict_name);
            });
 }
 

@@ -82,7 +82,8 @@ class PredictorClient {
               const std::vector<std::string>& int_feed_name,
               const std::vector<std::string>& fetch_name,
               PredictorRes& predict_res,  // NOLINT
-              const int& pid);
+              const int& pid,
+              const std::string& predictor_name);
 
   int batch_predict(
       const std::vector<std::vector<std::vector<float>>>& float_feed_batch,
@@ -91,7 +92,12 @@ class PredictorClient {
       const std::vector<std::string>& int_feed_name,
       const std::vector<std::string>& fetch_name,
       PredictorRes& predict_res_batch,  // NOLINT
-      const int& pid);
+      const int& pid,
+      const std::string& predictor_name);
+
+  const std::vector<std::string>& predictor_names() {
+    return _api.endpoint_names();
+  }
 
  private:
   PredictorApi _api;

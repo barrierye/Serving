@@ -15,6 +15,7 @@
 #pragma once
 #include <map>
 #include <string>
+#include <vector>
 #include "core/sdk-cpp/include/config_manager.h"
 #include "core/sdk-cpp/include/endpoint.h"
 #include "core/sdk-cpp/include/endpoint_config.h"
@@ -78,9 +79,12 @@ class PredictorApi {
     return 0;
   }
 
+  const std::vector<std::string>& endpoint_names() { return _endpoint_names; }
+
  private:
   EndpointConfigManager _config_manager;
   std::map<std::string, Endpoint*> _endpoints;
+  std::vector<std::string> _endpoint_names;  // for get all endpoints name
 };
 
 }  // namespace sdk_cpp

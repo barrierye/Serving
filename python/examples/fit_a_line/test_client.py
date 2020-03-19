@@ -18,7 +18,9 @@ import sys
 
 client = Client()
 client.load_client_config(sys.argv[1])
-client.connect(["127.0.0.1:9393"])
+client.add_variant('tag', ["127.0.0.1:9393"], 100)
+client.set_infer_engine_name('general_infer')
+client.connect()
 
 import paddle
 test_reader = paddle.batch(

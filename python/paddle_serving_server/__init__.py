@@ -128,7 +128,7 @@ class Server(object):
             self.model_toolkit_conf = server_sdk.ModelToolkitConf()
 
         if isinstance(model_config_paths, str):
-            model_config_paths = {"general_model": model_config_paths}
+            model_config_paths = {"general_infer": model_config_paths}
         elif not isinstance(model_config_paths, dict):
             raise Exception("model_config_paths can not be {}".format(
                 type(model_config_paths)))

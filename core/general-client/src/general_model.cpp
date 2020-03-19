@@ -138,13 +138,15 @@ int PredictorClient::predict(const std::vector<std::vector<float>> &float_feed,
                              const std::vector<std::string> &int_feed_name,
                              const std::vector<std::string> &fetch_name,
                              PredictorRes &predict_res,
-                             const int &pid) {  // NOLINT
+                             const int &pid,
+                             const std::string &predictor_name) {
   predict_res._int64_map.clear();
   predict_res._float_map.clear();
   Timer timeline;
   int64_t preprocess_start = timeline.TimeStampUS();
   _api.thrd_clear();
-  _predictor = _api.fetch_predictor("general_model");
+  VLOG(2) << "fetch predictor: " << predictor_name;
+  _predictor = _api.fetch_predictor(predictor_name);
 
   Request req;
   for (auto &name : fetch_name) {
@@ -271,7 +273,8 @@ int PredictorClient::batch_predict(
     const std::vector<std::string> &int_feed_name,
     const std::vector<std::string> &fetch_name,
     PredictorRes &predict_res_batch,
-    const int &pid) {
+    const int &pid,
+    const std::string &predictor_name) {
   int batch_size = std::max(float_feed_batch.size(), int_feed_batch.size());
 
   predict_res_batch._int64_map.clear();
@@ -282,7 +285,8 @@ int PredictorClient::batch_predict(
   int fetch_name_num = fetch_name.size();
 
   _api.thrd_clear();
-  _predictor = _api.fetch_predictor("general_model");
+  VLOG(2) << "fetch predictor: " << predictor_name;
+  _predictor = _api.fetch_predictor(predictor_name);
   VLOG(2) << "fetch general model predictor done.";
   VLOG(2) << "float feed name size: " << float_feed_name.size();
   VLOG(2) << "int feed name size: " << int_feed_name.size();

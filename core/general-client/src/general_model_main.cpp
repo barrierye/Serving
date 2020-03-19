@@ -27,6 +27,11 @@ int main(int argc, char* argv[]) {
   client->init("inference.conf");
   client->set_predictor_conf("./", "predictor.conf");
   client->create_predictor();
+  // NOLINT TODO: Now use only one predictor
+  const std::vector<std::string> predictor_names = client->predictor_names();
+  std::string infer_engine = predictor_names[0];
+  std::cerr << "now use only the first predictor: " << infer_engine
+            << std::endl;
   std::vector<std::vector<float>> float_feed;
   std::vector<std::vector<int64_t>> int_feed;
   std::vector<std::string> float_feed_name;
@@ -60,7 +65,8 @@ int main(int argc, char* argv[]) {
                     int_feed,
                     int_feed_name,
                     fetch_name,
-                    &result);
+                    &result,
+                    infer_engine);
 
     cout << label << "\t" << result["prediction"][1] << endl;
 

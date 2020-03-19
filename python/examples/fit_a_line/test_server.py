@@ -31,6 +31,8 @@ op_seq_maker.add_op(response_op)
 
 server = Server()
 server.set_op_sequence(op_seq_maker.get_op_sequence())
-server.load_model_config(sys.argv[1])
+# engine_name: model_path
+model_config_paths = {'general_infer': sys.argv[1]}
+server.load_model_config(model_config_paths)
 server.prepare_server(workdir="work_dir1", port=9393, device="cpu")
 server.run_server()
