@@ -544,16 +544,27 @@ int PredictorClient::numpy_predict(
         VLOG(2) << "fetch var " << name << " index " << idx << " shape size "
                 << shape_size;
         model._shape_map[name].resize(shape_size);
+        memcpy(reinterpret_cast<void *>(&model._shape_map[name][0]),
+               reinterpret_cast<void *>(
+                   output.insts(0).tensor_array(idx).shape().data()),
+               sizeof(int) * shape_size);
+        /*
         for (int i = 0; i < shape_size; ++i) {
           model._shape_map[name][i] =
               output.insts(0).tensor_array(idx).shape(i);
-        }
+        }*/
         int lod_size = output.insts(0).tensor_array(idx).lod_size();
         if (lod_size > 0) {
           model._lod_map[name].resize(lod_size);
+          memcpy(reinterpret_cast<void *>(&model._lod_map[name][0]),
+                 reinterpret_cast<void *>(
+                     output.insts(0).tensor_array(idx).lod().data()),
+                 sizeof(int) * lod_size);
+          /*
           for (int i = 0; i < lod_size; ++i) {
             model._lod_map[name][i] = output.insts(0).tensor_array(idx).lod(i);
           }
+          */
         }
         idx += 1;
       }
@@ -564,22 +575,31 @@ int PredictorClient::numpy_predict(
         // int idx = _fetch_name_to_idx[name];
         if (_fetch_name_to_type[name] == 0) {
           VLOG(2) << "ferch var " << name << "type int";
-          model._int64_value_map[name].resize(
-              output.insts(0).tensor_array(idx).int64_data_size());
           int size = output.insts(0).tensor_array(idx).int64_data_size();
+          model._int64_value_map[name].resize(size);
+          memcpy(reinterpret_cast<void *>(&model._int64_value_map[name][0]),
+                 reinterpret_cast<void *>(
+                     output.insts(0).tensor_array(idx).int64_data().data()),
+                 sizeof(int64_t) * size);
+          /*
           for (int i = 0; i < size; ++i) {
             model._int64_value_map[name][i] =
                 output.insts(0).tensor_array(idx).int64_data(i);
-          }
+          }*/
         } else {
           VLOG(2) << "fetch var " << name << "type float";
-          model._float_value_map[name].resize(
-              output.insts(0).tensor_array(idx).float_data_size());
           int size = output.insts(0).tensor_array(idx).float_data_size();
+          model._float_value_map[name].resize(size);
+          memcpy(reinterpret_cast<void *>(&model._float_value_map[name][0]),
+                 reinterpret_cast<void *>(
+                     output.insts(0).tensor_array(idx).float_data().data()),
+                 sizeof(float) * size);
+          /*
           for (int i = 0; i < size; ++i) {
             model._float_value_map[name][i] =
                 output.insts(0).tensor_array(idx).float_data(i);
           }
+          */
         }
         idx += 1;
       }
