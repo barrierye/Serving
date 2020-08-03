@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # pylint: disable=doc-string-missing
+from time import time as _time
 import threading
 import multiprocessing
 import multiprocessing.queues
@@ -25,6 +26,7 @@ else:
 import numpy as np
 import logging
 import enum
+import os
 import copy
 
 _LOGGER = logging.getLogger()
@@ -37,7 +39,8 @@ class ChannelDataEcode(enum.Enum):
     TYPE_ERROR = 3
     RPC_PACKAGE_ERROR = 4
     CLIENT_ERROR = 5
-    UNKNOW = 6
+    CLOSED_ERROR = 6
+    UNKNOW = 7
 
 
 class ChannelDataType(enum.Enum):
@@ -53,7 +56,8 @@ class ChannelData(object):
                  dictdata=None,
                  data_id=None,
                  ecode=None,
-                 error_info=None):
+                 error_info=None,
+                 client_need_profile=False):
         '''
         There are several ways to use it:
         
@@ -66,27 +70,38 @@ class ChannelData(object):
         '''
         if ecode is not None:
             if data_id is None or error_info is None:
-                raise ValueError("data_id and error_info cannot be None")
+                _LOGGER.critical("Failed to generate ChannelData: data_id"
+                                 " and error_info cannot be None")
+                os._exit(-1)
             datatype = ChannelDataType.ERROR.value
         else:
             if datatype == ChannelDataType.CHANNEL_NPDATA.value:
                 ecode, error_info = ChannelData.check_npdata(npdata)
                 if ecode != ChannelDataEcode.OK.value:
                     datatype = ChannelDataType.ERROR.value
-                    _LOGGER.error(error_info)
+                    _LOGGER.error("(logid={}) {}".format(data_id, error_info))
             elif datatype == ChannelDataType.DICT.value:
                 ecode, error_info = ChannelData.check_dictdata(dictdata)
                 if ecode != ChannelDataEcode.OK.value:
                     datatype = ChannelDataType.ERROR.value
-                    _LOGGER.error(error_info)
+                    _LOGGER.error("(logid={}) {}".format(data_id, error_info))
             else:
-                raise ValueError("datatype not match")
+                _LOGGER.critical("(logid={}) datatype not match".format(
+                    data_id))
+                os._exit(-1)
         self.datatype = datatype
         self.npdata = npdata
         self.dictdata = dictdata
         self.id = data_id
         self.ecode = ecode
         self.error_info = error_info
+        self.client_need_profile = client_need_profile
+        self.profile_data_set = set()
+
+    def add_profile(self, profile_set):
+        if self.client_need_profile is False:
+            self.client_need_profile = True
+        self.profile_data_set |= profile_set
 
     @staticmethod
     def check_dictdata(dictdata):
@@ -97,14 +112,24 @@ class ChannelData(object):
             for sample in dictdata:
                 if not isinstance(sample, dict):
                     ecode = ChannelDataEcode.TYPE_ERROR.value
-                    error_info = "the value of data must " \
-                            "be dict, but get {}.".format(type(sample))
+                    error_info = "Failed to check data: the type of " \
+                            "data must be dict, but get {}.".format(type(sample))
                     break
         elif not isinstance(dictdata, dict):
             # batch size = 1
             ecode = ChannelDataEcode.TYPE_ERROR.value
-            error_info = "the value of data must " \
-                        "be dict, but get {}.".format(type(dictdata))
+            error_info = "Failed to check data: the type of data must " \
+                    "be dict, but get {}.".format(type(dictdata))
+        return ecode, error_info
+
+    @staticmethod
+    def check_batch_npdata(batch):
+        ecode = ChannelDataEcode.OK.value
+        error_info = None
+        for npdata in batch:
+            ecode, error_info = ChannelData.check_npdata(npdata)
+            if ecode != ChannelDataEcode.OK.value:
+                break
         return ecode, error_info
 
     @staticmethod
@@ -116,27 +141,30 @@ class ChannelData(object):
             for sample in npdata:
                 if not isinstance(sample, dict):
                     ecode = ChannelDataEcode.TYPE_ERROR.value
-                    error_info = "the value of data must " \
-                            "be dict, but get {}.".format(type(sample))
+                    error_info = "Failed to check data: the " \
+                            "value of data must be dict, but get {}.".format(
+                                    type(sample))
                     break
                 for _, value in sample.items():
                     if not isinstance(value, np.ndarray):
                         ecode = ChannelDataEcode.TYPE_ERROR.value
-                        error_info = "the value of data must " \
-                                "be np.ndarray, but get {}.".format(type(value))
+                        error_info = "Failed to check data: the" \
+                                " value of data must be np.ndarray, but get {}.".format(
+                                        type(value))
                         return ecode, error_info
         elif isinstance(npdata, dict):
             # batch_size = 1
             for _, value in npdata.items():
                 if not isinstance(value, np.ndarray):
                     ecode = ChannelDataEcode.TYPE_ERROR.value
-                    error_info = "the value of data must " \
-                            "be np.ndarray, but get {}.".format(type(value))
+                    error_info = "Failed to check data: the value " \
+                            "of data must be np.ndarray, but get {}.".format(
+                                    type(value))
                     break
         else:
             ecode = ChannelDataEcode.TYPE_ERROR.value
-            error_info = "the value of data must " \
-                    "be dict, but get {}.".format(type(npdata))
+            error_info = "Failed to check data: the value of data " \
+                    "must be dict, but get {}.".format(type(npdata))
         return ecode, error_info
 
     def parse(self):
@@ -148,7 +176,9 @@ class ChannelData(object):
             # return dict
             feed = self.dictdata
         else:
-            raise TypeError("Error type({}) in datatype.".format(self.datatype))
+            _LOGGER.critical("Failed to parse channeldata: error " \
+                    "type({}) in datatype.".format(self.datatype))
+            os._exit(-1)
         return feed
 
     def __str__(self):
@@ -156,7 +186,7 @@ class ChannelData(object):
             ChannelDataType(self.datatype).name, self.ecode, self.id)
 
 
-class ProcessChannel(multiprocessing.queues.Queue):
+class ProcessChannel(object):
     """ 
     (Process version) The channel used for communication between Ops.
 
@@ -166,7 +196,7 @@ class ProcessChannel(multiprocessing.queues.Queue):
         Only when all types of Ops get the data of the same ID,
         the data will be poped; The Op of the same type will not
         get the data of the same ID.
-    3. (TODO) Timeout and BatchSize are not fully supported.
+    3. Function front support timeout param to make auto-batching.
 
     Note:
     1. The ID of the data in the channel must be different.
@@ -185,19 +215,17 @@ class ProcessChannel(multiprocessing.queues.Queue):
         maintains the data obtained from queue.
     """
 
-    def __init__(self, manager, name=None, maxsize=0, timeout=None):
-        # https://stackoverflow.com/questions/39496554/cannot-subclass-multiprocessing-queue-in-python-3-5/
-        if sys.version_info.major == 2:
-            super(ProcessChannel, self).__init__(maxsize=maxsize)
-        elif sys.version_info.major == 3:
-            super(ProcessChannel, self).__init__(
-                maxsize=maxsize, ctx=multiprocessing.get_context())
-        else:
-            raise Exception("Error Python version")
+    def __init__(self, manager, name=None, maxsize=0):
+        # For queue multiprocess: after putting an object on 
+        # an empty queue there may be an infinitessimal delay
+        # before the queue's :meth:`~Queue.empty`
+        # see more:
+        # - https://bugs.python.org/issue18277
+        # - https://hg.python.org/cpython/rev/860fc6a2bd21
+        self._que = manager.Queue(maxsize=maxsize)
         self._maxsize = maxsize
-        self._timeout = timeout
         self.name = name
-        self._stop = False
+        self._stop = manager.Value('i', 0)
 
         self._cv = multiprocessing.Condition()
 
@@ -220,62 +248,68 @@ class ProcessChannel(multiprocessing.queues.Queue):
     def _log(self, info_str):
         return "[{}] {}".format(self.name, info_str)
 
-    def debug(self):
-        return self._log("p: {}, c: {}".format(self.get_producers(),
-                                               self.get_consumers()))
-
     def add_producer(self, op_name):
         """ not thread safe, and can only be called during initialization. """
         if op_name in self._producers:
-            raise ValueError(
-                self._log("producer({}) is already in channel".format(op_name)))
+            _LOGGER.critical(
+                self._log("Failed to add producer: producer({})" \
+                        " is already in channel".format(op_name)))
+            os._exit(-1)
         self._producers.append(op_name)
+        _LOGGER.debug(self._log("Succ add a producer: {}".format(op_name)))
 
     def add_consumer(self, op_name):
         """ not thread safe, and can only be called during initialization. """
         if op_name in self._consumer_cursors:
-            raise ValueError(
-                self._log("consumer({}) is already in channel".format(op_name)))
+            _LOGGER.critical(
+                    self._log("Failed to add consumer: consumer({})" \
+                            " is already in channel".format(op_name)))
+            os._exit(-1)
         self._consumer_cursors[op_name] = 0
 
         if self._cursor_count.get(0) is None:
             self._cursor_count[0] = 0
         self._cursor_count[0] += 1
+        _LOGGER.debug(self._log("Succ add a consumer: {}".format(op_name)))
 
     def push(self, channeldata, op_name=None):
         _LOGGER.debug(
-            self._log("{} try to push data: {}".format(op_name,
-                                                       channeldata.__str__())))
+            self._log("(logid={}) Op({}) Pushing data".format(channeldata.id,
+                                                              op_name)))
         if len(self._producers) == 0:
-            raise Exception(
+            _LOGGER.critical(
                 self._log(
-                    "expected number of producers to be greater than 0, but the it is 0."
-                ))
+                    "(logid={}) Op({}) Failed to push data: expected number"
+                    " of producers to be greater than 0, but the it is 0.".
+                    format(channeldata.id, op_name)))
+            os._exit(-1)
         elif len(self._producers) == 1:
             with self._cv:
-                while self._stop is False:
+                while self._stop.value == 0:
                     try:
-                        self.put({op_name: channeldata}, timeout=0)
+                        self._que.put({op_name: channeldata}, timeout=0)
                         break
                     except Queue.Full:
                         self._cv.wait()
-                _LOGGER.debug(
-                    self._log("{} channel size: {}".format(op_name,
-                                                           self.qsize())))
+                if self._stop.value == 1:
+                    raise ChannelStopError()
                 self._cv.notify_all()
-                _LOGGER.debug(self._log("{} notify all".format(op_name)))
-            _LOGGER.debug(self._log("{} push data succ!".format(op_name)))
+            _LOGGER.debug(
+                self._log("(logid={}) Op({}) Pushed data into internal queue.".
+                          format(channeldata.id, op_name)))
             return True
         elif op_name is None:
-            raise Exception(
+            _LOGGER.critical(
                 self._log(
-                    "There are multiple producers, so op_name cannot be None."))
+                    "(logid={}) Op({}) Failed to push data: there are multiple "
+                    "producers, so op_name cannot be None.".format(
+                        channeldata.id, op_name)))
+            os._exit(-1)
 
         producer_num = len(self._producers)
         data_id = channeldata.id
         put_data = None
         with self._cv:
-            _LOGGER.debug(self._log("{} get lock".format(op_name)))
             if data_id not in self._input_buf:
                 self._input_buf[data_id] = {
                     name: None
@@ -297,61 +331,73 @@ class ProcessChannel(multiprocessing.queues.Queue):
 
             if put_data is None:
                 _LOGGER.debug(
-                    self._log("{} push data succ, but not push to queue.".
-                              format(op_name)))
+                    self._log(
+                        "(logid={}) Op({}) Pushed data into input_buffer.".
+                        format(data_id, op_name)))
             else:
-                while self._stop is False:
+                while self._stop.value == 0:
                     try:
-                        _LOGGER.debug(
-                            self._log("{} push data succ: {}".format(
-                                op_name, put_data.__str__())))
-                        self.put(put_data, timeout=0)
+                        self._que.put(put_data, timeout=0)
                         break
                     except Queue.Empty:
                         self._cv.wait()
+                if self._stop.value == 1:
+                    raise ChannelStopError()
 
                 _LOGGER.debug(
-                    self._log("multi | {} push data succ!".format(op_name)))
+                    self._log(
+                        "(logid={}) Op({}) Pushed data into internal_queue.".
+                        format(data_id, op_name)))
             self._cv.notify_all()
         return True
 
-    def front(self, op_name=None):
-        _LOGGER.debug(self._log("{} try to get data...".format(op_name)))
+    def front(self, op_name=None, timeout=None):
+        _LOGGER.debug(
+            self._log("Op({}) Getting data[?]; timeout(s)={}".format(op_name,
+                                                                     timeout)))
+        endtime = None
+        if timeout is not None:
+            if timeout <= 0:
+                timeout = None
+            else:
+                endtime = _time() + timeout
+
         if len(self._consumer_cursors) == 0:
-            raise Exception(
+            _LOGGER.critical(
                 self._log(
-                    "expected number of consumers to be greater than 0, but the it is 0."
-                ))
+                    "Op({}) Failed to get data: expected number of consumers to be " \
+                            "greater than 0, but the it is 0.".format(op_name)))
+            os._exit(-1)
         elif len(self._consumer_cursors) == 1:
             resp = None
             with self._cv:
-                while self._stop is False and resp is None:
+                while self._stop.value == 0 and resp is None:
                     try:
-                        _LOGGER.debug(
-                            self._log("{} try to get(with channel empty: {})".
-                                      format(op_name, self.empty())))
-                        # For queue multiprocess: after putting an object on 
-                        # an empty queue there may be an infinitessimal delay
-                        # before the queue's :meth:`~Queue.empty`
-                        # see more:
-                        # - https://bugs.python.org/issue18277
-                        # - https://hg.python.org/cpython/rev/860fc6a2bd21
-                        resp = self.get(timeout=1e-3)
+                        resp = self._que.get(timeout=0)
                         break
                     except Queue.Empty:
-                        _LOGGER.debug(
-                            self._log(
-                                "{} wait for empty queue(with channel empty: {})".
-                                format(op_name, self.empty())))
-                        self._cv.wait()
+                        if timeout is not None:
+                            remaining = endtime - _time()
+                            if remaining <= 0.0:
+                                _LOGGER.debug(
+                                    self._log("Op({}) Failed to get data: "
+                                              "timeout".format(op_name)))
+                                raise ChannelTimeoutError()
+                            self._cv.wait(remaining)
+                        else:
+                            self._cv.wait()
+                if self._stop.value == 1:
+                    raise ChannelStopError()
             _LOGGER.debug(
-                self._log("{} get data succ: {}".format(op_name, resp.__str__(
-                ))))
+                self._log("(logid={}) Op({}) Got data".format(resp.values()[0]
+                                                              .id, op_name)))
             return resp
         elif op_name is None:
-            raise Exception(
+            _LOGGER.critical(
                 self._log(
-                    "There are multiple consumers, so op_name cannot be None."))
+                    "Op({}) Failed to get data: there are multiple consumers, "
+                    "so op_name cannot be None.".format(op_name)))
+            os._exit(-1)
 
         # In output_buf, different Ops (according to op_name) have different
         # cursors. In addition, there is a base_cursor. Their difference is
@@ -366,38 +412,34 @@ class ProcessChannel(multiprocessing.queues.Queue):
         with self._cv:
             # When the data required by the current Op is not in output_buf,
             # it is necessary to obtain a data from queue and add it to output_buf.
-            while self._stop is False and self._consumer_cursors[
+            while self._stop.value == 0 and self._consumer_cursors[
                     op_name] - self._base_cursor.value >= len(self._output_buf):
-                _LOGGER.debug(
-                    self._log(
-                        "({}) B self._consumer_cursors: {}, self._base_cursor: {}, len(self._output_buf): {}".
-                        format(op_name, self._consumer_cursors,
-                               self._base_cursor.value, len(self._output_buf))))
                 try:
-                    _LOGGER.debug(
-                        self._log("{} try to get(with channel size: {})".format(
-                            op_name, self.qsize())))
-                    # For queue multiprocess: after putting an object on 
-                    # an empty queue there may be an infinitessimal delay
-                    # before the queue's :meth:`~Queue.empty`
-                    # see more:
-                    # - https://bugs.python.org/issue18277
-                    # - https://hg.python.org/cpython/rev/860fc6a2bd21
-                    channeldata = self.get(timeout=1e-3)
+                    channeldata = self._que.get(timeout=0)
                     self._output_buf.append(channeldata)
-                    break
-                except Queue.Empty:
                     _LOGGER.debug(
                         self._log(
-                            "{} wait for empty queue(with channel size: {})".
-                            format(op_name, self.qsize())))
-                    self._cv.wait()
+                            "(logid={}) Op({}) Pop ready item into output_buffer".
+                            format(channeldata.values()[0].id, op_name)))
+                    break
+                except Queue.Empty:
+                    if timeout is not None:
+                        remaining = endtime - _time()
+                        if remaining <= 0.0:
+                            _LOGGER.debug(
+                                self._log("Op({}) Failed to get data: timeout".
+                                          format(op_name)))
+                            raise ChannelTimeoutError()
+                        self._cv.wait(remaining)
+                    else:
+                        self._cv.wait()
+            if self._stop.value == 1:
+                raise ChannelStopError()
 
             consumer_cursor = self._consumer_cursors[op_name]
             base_cursor = self._base_cursor.value
             data_idx = consumer_cursor - base_cursor
             resp = self._output_buf[data_idx]
-            _LOGGER.debug(self._log("{} get data: {}".format(op_name, resp)))
 
             self._cursor_count[consumer_cursor] -= 1
             if consumer_cursor == base_cursor and self._cursor_count[
@@ -409,6 +451,7 @@ class ProcessChannel(multiprocessing.queues.Queue):
                 self._base_cursor.value += 1
                 # to avoid cursor overflow
                 if self._base_cursor.value >= self._reset_max_cursor:
+                    _LOGGER.info(self._log("Reset cursor in Channel"))
                     self._base_cursor.value -= self._reset_max_cursor
                     for name in self._consumer_cursors.keys():
                         self._consumer_cursors[name] -= self._reset_max_cursor
@@ -426,22 +469,18 @@ class ProcessChannel(multiprocessing.queues.Queue):
                 self._cursor_count[new_consumer_cursor] = 0
             self._cursor_count[new_consumer_cursor] += 1
 
-            _LOGGER.debug(
-                self._log(
-                    "({}) A self._consumer_cursors: {}, self._base_cursor: {}, len(self._output_buf): {}".
-                    format(op_name, self._consumer_cursors,
-                           self._base_cursor.value, len(self._output_buf))))
-            _LOGGER.debug(self._log("{} notify all".format(op_name)))
             self._cv.notify_all()
 
-        _LOGGER.debug(self._log("multi | {} get data succ!".format(op_name)))
-        return resp  # reference, read only
+        _LOGGER.debug(
+            self._log("(logid={}) Op({}) Got data from output_buffer".format(
+                resp.values()[0].id, op_name)))
+        return resp
 
     def stop(self):
-        #TODO
-        self.close()
-        self._stop = True
-        self._cv.notify_all()
+        _LOGGER.info(self._log("stop."))
+        self._stop.value = 1
+        with self._cv:
+            self._cv.notify_all()
 
 
 class ThreadChannel(Queue.Queue):
@@ -454,7 +493,7 @@ class ThreadChannel(Queue.Queue):
         Only when all types of Ops get the data of the same ID,
         the data will be poped; The Op of the same type will not
         get the data of the same ID.
-    3. (TODO) Timeout and BatchSize are not fully supported.
+    3. Function front support timeout param to make auto-batching.
 
     Note:
     1. The ID of the data in the channel must be different.
@@ -473,10 +512,9 @@ class ThreadChannel(Queue.Queue):
         maintains the data obtained from queue.
     """
 
-    def __init__(self, name=None, maxsize=-1, timeout=None):
+    def __init__(self, name=None, maxsize=-1):
         Queue.Queue.__init__(self, maxsize=maxsize)
         self._maxsize = maxsize
-        self._timeout = timeout
         self.name = name
         self._stop = False
 
@@ -501,37 +539,41 @@ class ThreadChannel(Queue.Queue):
     def _log(self, info_str):
         return "[{}] {}".format(self.name, info_str)
 
-    def debug(self):
-        return self._log("p: {}, c: {}".format(self.get_producers(),
-                                               self.get_consumers()))
-
     def add_producer(self, op_name):
         """ not thread safe, and can only be called during initialization. """
         if op_name in self._producers:
-            raise ValueError(
-                self._log("producer({}) is already in channel".format(op_name)))
+            _LOGGER.critical(
+                self._log("Failed to add producer: producer({}) is "
+                          "already in channel".format(op_name)))
+            os._exit(-1)
         self._producers.append(op_name)
+        _LOGGER.debug(self._log("Succ add a producer: {}".format(op_name)))
 
     def add_consumer(self, op_name):
         """ not thread safe, and can only be called during initialization. """
         if op_name in self._consumer_cursors:
-            raise ValueError(
-                self._log("consumer({}) is already in channel".format(op_name)))
+            _LOGGER.critical(
+                self._log("Failed to add consumer: consumer({}) is "
+                          "already in channel".format(op_name)))
+            os._exit(-1)
         self._consumer_cursors[op_name] = 0
 
         if self._cursor_count.get(0) is None:
             self._cursor_count[0] = 0
         self._cursor_count[0] += 1
+        _LOGGER.debug(self._log("Succ add a consumer: {}".format(op_name)))
 
     def push(self, channeldata, op_name=None):
         _LOGGER.debug(
-            self._log("{} try to push data: {}".format(op_name,
-                                                       channeldata.__str__())))
+            self._log("(logid={}) Op({}) Pushing data".format(channeldata.id,
+                                                              op_name)))
         if len(self._producers) == 0:
-            raise Exception(
+            _LOGGER.critical(
                 self._log(
-                    "expected number of producers to be greater than 0, but the it is 0."
-                ))
+                    "(logid={}) Op({}) Failed to push data: expected number of "
+                    "producers to be greater than 0, but the it is 0.".format(
+                        channeldata.id, op_name)))
+            os._exit(-1)
         elif len(self._producers) == 1:
             with self._cv:
                 while self._stop is False:
@@ -540,19 +582,25 @@ class ThreadChannel(Queue.Queue):
                         break
                     except Queue.Full:
                         self._cv.wait()
+                if self._stop:
+                    raise ChannelStopError()
                 self._cv.notify_all()
-            _LOGGER.debug(self._log("{} push data succ!".format(op_name)))
+            _LOGGER.debug(
+                self._log("(logid={}) Op({}) Pushed data into internal_queue.".
+                          format(channeldata.id, op_name)))
             return True
         elif op_name is None:
-            raise Exception(
+            _LOGGER.critical(
                 self._log(
-                    "There are multiple producers, so op_name cannot be None."))
+                    "(logid={}) Op({}) Failed to push data: there are multiple"
+                    " producers, so op_name cannot be None.".format(
+                        channeldata.id, op_name)))
+            os._exit(-1)
 
         producer_num = len(self._producers)
         data_id = channeldata.id
         put_data = None
         with self._cv:
-            _LOGGER.debug(self._log("{} get lock".format(op_name)))
             if data_id not in self._input_buf:
                 self._input_buf[data_id] = {
                     name: None
@@ -569,8 +617,9 @@ class ThreadChannel(Queue.Queue):
 
             if put_data is None:
                 _LOGGER.debug(
-                    self._log("{} push data succ, but not push to queue.".
-                              format(op_name)))
+                    self._log(
+                        "(logid={}) Op({}) Pushed data into input_buffer.".
+                        format(data_id, op_name)))
             else:
                 while self._stop is False:
                     try:
@@ -578,19 +627,33 @@ class ThreadChannel(Queue.Queue):
                         break
                     except Queue.Empty:
                         self._cv.wait()
+                if self._stop:
+                    raise ChannelStopError()
 
                 _LOGGER.debug(
-                    self._log("multi | {} push data succ!".format(op_name)))
+                    self._log(
+                        "(logid={}) Op({}) Pushed data into internal_queue.".
+                        format(data_id, op_name)))
             self._cv.notify_all()
         return True
 
-    def front(self, op_name=None):
-        _LOGGER.debug(self._log("{} try to get data".format(op_name)))
+    def front(self, op_name=None, timeout=None):
+        _LOGGER.debug(
+            self._log("Op({}) Getting data[?]; timeout(s)={}".format(op_name,
+                                                                     timeout)))
+        endtime = None
+        if timeout is not None:
+            if timeout <= 0:
+                timeout = None
+            else:
+                endtime = _time() + timeout
+
         if len(self._consumer_cursors) == 0:
-            raise Exception(
+            _LOGGER.critical(
                 self._log(
-                    "expected number of consumers to be greater than 0, but the it is 0."
-                ))
+                    "Op({}) Failed to get data: expected number of consumers to be "
+                    "greater than 0, but the it is 0.".format(op_name)))
+            os._exit(-1)
         elif len(self._consumer_cursors) == 1:
             resp = None
             with self._cv:
@@ -599,15 +662,29 @@ class ThreadChannel(Queue.Queue):
                         resp = self.get(timeout=0)
                         break
                     except Queue.Empty:
-                        self._cv.wait()
+                        if timeout is not None:
+                            remaining = endtime - _time()
+                            if remaining <= 0.0:
+                                _LOGGER.debug(
+                                    self._log(
+                                        "Op({}) Failed to get data: timeout".
+                                        format(op_name)))
+                                raise ChannelTimeoutError()
+                            self._cv.wait(remaining)
+                        else:
+                            self._cv.wait()
+                if self._stop:
+                    raise ChannelStopError()
             _LOGGER.debug(
-                self._log("{} get data succ: {}".format(op_name, resp.__str__(
-                ))))
+                self._log("(logid={}) Op({}) Got data".format(resp.values()[0]
+                                                              .id, op_name)))
             return resp
         elif op_name is None:
-            raise Exception(
-                self._log(
-                    "There are multiple consumers, so op_name cannot be None."))
+            _LOGGER.critical(
+                self._log("Op({}) Failed to get data: there are multiple "
+                          "consumers, so op_name cannot be None.".format(
+                              op_name)))
+            os._exit(-1)
 
         # In output_buf, different Ops (according to op_name) have different
         # cursors. In addition, there is a base_cursor. Their difference is
@@ -627,15 +704,30 @@ class ThreadChannel(Queue.Queue):
                 try:
                     channeldata = self.get(timeout=0)
                     self._output_buf.append(channeldata)
+                    _LOGGER.debug(
+                        self._log(
+                            "(logid={}) Op({}) Pop ready item into output_buffer".
+                            format(channeldata.values()[0].id, op_name)))
                     break
                 except Queue.Empty:
-                    self._cv.wait()
+                    if timeout is not None:
+                        remaining = endtime - _time()
+                        if remaining <= 0.0:
+                            _LOGGER.debug(
+                                self._log("Op({}) Failed to get data: timeout".
+                                          format(op_name)))
+                            raise ChannelTimeoutError()
+                        self._cv.wait(remaining)
+                    else:
+                        self._cv.wait()
+            if self._stop:
+                raise ChannelStopError()
 
             consumer_cursor = self._consumer_cursors[op_name]
             base_cursor = self._base_cursor
             data_idx = consumer_cursor - base_cursor
-            resp = self._output_buf[data_idx]
-            _LOGGER.debug(self._log("{} get data: {}".format(op_name, resp)))
+
+            resp = None
 
             self._cursor_count[consumer_cursor] -= 1
             if consumer_cursor == base_cursor and self._cursor_count[
@@ -643,10 +735,11 @@ class ThreadChannel(Queue.Queue):
                 # When all the different Ops get the data that data_idx points
                 # to, pop the data from output_buf.
                 self._cursor_count.pop(consumer_cursor)
-                self._output_buf.pop(0)
+                resp = self._output_buf.pop(0)
                 self._base_cursor += 1
                 # to avoid cursor overflow
                 if self._base_cursor >= self._reset_max_cursor:
+                    _LOGGER.info(self._log("Reset cursor in Channel"))
                     self._base_cursor -= self._reset_max_cursor
                     for name in self._consumer_cursors:
                         self._consumer_cursors[name] -= self._reset_max_cursor
@@ -654,6 +747,8 @@ class ThreadChannel(Queue.Queue):
                         cursor - self._reset_max_cursor: count
                         for cursor, count in self._cursor_count.items()
                     }
+            else:
+                resp = copy.deepcopy(self._output_buf[data_idx])
 
             self._consumer_cursors[op_name] += 1
             new_consumer_cursor = self._consumer_cursors[op_name]
@@ -663,12 +758,23 @@ class ThreadChannel(Queue.Queue):
 
             self._cv.notify_all()
 
-        _LOGGER.debug(self._log("multi | {} get data succ!".format(op_name)))
-        # return resp  # reference, read only
-        return copy.deepcopy(resp)
+        _LOGGER.debug(
+            self._log("(logid={}) Op({}) Got data from output_buffer".format(
+                resp.values()[0].id, op_name)))
+        return resp
 
     def stop(self):
-        #TODO
-        self.close()
+        _LOGGER.info(self._log("stop."))
         self._stop = True
-        self._cv.notify_all()
+        with self._cv:
+            self._cv.notify_all()
+
+
+class ChannelTimeoutError(RuntimeError):
+    def __init__(self):
+        pass
+
+
+class ChannelStopError(RuntimeError):
+    def __init__(self):
+        pass

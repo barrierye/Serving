@@ -13,24 +13,23 @@
 # limitations under the License.
 # pylint: disable=doc-string-missing
 
+import logging
+logging.basicConfig(
+    format="[%(process)d](%(threadName)s) %(levelname)s %(asctime)s [%(filename)s:%(lineno)d] %(message)s",
+    level=logging.INFO)
+
 from paddle_serving_server.pipeline import Op, RequestOp, ResponseOp
 from paddle_serving_server.pipeline import PipelineServer
 from paddle_serving_server.pipeline.proto import pipeline_service_pb2
 from paddle_serving_server.pipeline.channel import ChannelDataEcode
 import numpy as np
-import logging
 from paddle_serving_app.reader import IMDBDataset
 
-_LOGGER = logging.getLogger(__name__)
-
-logging.basicConfig(
-    format='%(asctime)s %(levelname)-8s [%(filename)s:%(lineno)d] %(message)s',
-    datefmt='%Y-%m-%d %H:%M',
-    level=logging.DEBUG)
+_LOGGER = logging.getLogger()
 
 
 class ImdbRequestOp(RequestOp):
-    def load_user_resources(self):
+    def init_op(self):
         self.imdb_dataset = IMDBDataset()
         self.imdb_dataset.load_resource('imdb.vocab')
 
@@ -79,7 +78,9 @@ bow_op = Op(name="bow",
             client_config="imdb_bow_client_conf/serving_client_conf.prototxt",
             concurrency=1,
             timeout=-1,
-            retry=1)
+            retry=1,
+            batch_size=3,
+            auto_batching_timeout=1000)
 cnn_op = Op(name="cnn",
             input_ops=[read_op],
             server_endpoints=["127.0.0.1:9292"],
@@ -87,13 +88,17 @@ cnn_op = Op(name="cnn",
             client_config="imdb_cnn_client_conf/serving_client_conf.prototxt",
             concurrency=1,
             timeout=-1,
-            retry=1)
+            retry=1,
+            batch_size=1,
+            auto_batching_timeout=None)
 combine_op = CombineOp(
     name="combine",
     input_ops=[bow_op, cnn_op],
     concurrency=1,
     timeout=-1,
-    retry=1)
+    retry=1,
+    batch_size=2,
+    auto_batching_timeout=None)
 
 # fetch output of bow_op
 # response_op = ImdbResponseOp(input_ops=[bow_op])
